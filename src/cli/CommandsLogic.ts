@@ -184,7 +184,8 @@ export default class CommandsLogic {
       const relayAddress = response.relayManagerAddress
       const relayHubAddress = response.relayHubAddress
 
-      const relayHub = await this.contractInteractor._createRelayHub(relayHubAddress)
+      // TODO: this may not work, test manually before commiting!
+      const relayHub = await this.contractInteractor._createRelayHub()
       const stakeManagerAddress = await relayHub.stakeManager()
       const stakeManager = await this.contractInteractor._createStakeManager(stakeManagerAddress)
       const { stake, unstakeDelay, owner } = await stakeManager.getStakeInfo(relayAddress)
