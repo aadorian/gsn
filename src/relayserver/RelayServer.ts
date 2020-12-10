@@ -9,10 +9,10 @@ import { IRelayHubInstance } from '../../types/truffle-contracts'
 import ContractInteractor, {
   TransactionRejectedByPaymaster,
   TransactionRelayed
-} from '../relayclient/ContractInteractor'
+} from '../common/ContractInteractor'
 import { GasPriceFetcher } from '../relayclient/GasPriceFetcher'
-import { Address, IntString } from '../relayclient/types/Aliases'
-import { RelayTransactionRequest } from '../relayclient/types/RelayTransactionRequest'
+import { Address, IntString } from '../common/types/Aliases'
+import { RelayTransactionRequest } from '../common/types/RelayTransactionRequest'
 
 import PingResponse from '../common/PingResponse'
 import VersionsManager from '../common/VersionsManager'
@@ -32,7 +32,7 @@ import {
 
 import { RegistrationManager } from './RegistrationManager'
 import { PaymasterStatus, ReputationManager } from './ReputationManager'
-import { SendTransactionDetails, TransactionManager } from './TransactionManager'
+import { SendTransactionDetails, SignedTransactionDetails, TransactionManager } from './TransactionManager'
 import { ServerAction } from './StoredTransaction'
 import { TxStoreManager } from './TxStoreManager'
 import { configureServer, ServerConfigParams, ServerDependencies } from './ServerConfigParams'
@@ -256,11 +256,11 @@ export class RelayServer extends EventEmitter {
           from: this.workerAddress,
           gasPrice: req.relayRequest.relayData.gasPrice,
           gasLimit: maxPossibleGas
-        })
+        }, 'pending')
     } catch (e) {
       throw new Error(`relayCall reverted in server: ${(e as Error).message}`)
     }
-    this.logger.debug(`Result for view-only relay call:
+    this.logger.debug(`Result for view-only relay call (on pending blck):
 paymasterAccepted  | ${viewRelayCallRet.paymasterAccepted ? chalk.green('true') : chalk.red('false')}
 returnValue        | ${viewRelayCallRet.returnValue}
 `)
@@ -441,7 +441,7 @@ returnValue        | ${viewRelayCallRet.returnValue}
     )
     await this.registrationManager.init()
 
-    this.chainId = await this.contractInteractor.getChainId()
+    this.chainId = await this.contractInteractor.chainId
     this.networkId = await this.contractInteractor.getNetworkId()
     if (this.config.devMode && (this.chainId < 1000 || this.networkId < 1000)) {
       this.logger.error('Don\'t use real network\'s chainId & networkId while in devMode.')
@@ -658,32 +658,32 @@ latestBlock timestamp   | ${latestBlock.timestamp}
   }
 
   /**
-   * Resend the earliest pending transactions of all signers (manager, workers)
-   * @return the receipt from the first request
+   * Resend all outgoing pending transactions with insufficient gas price by all signers (manager, workers)
+   * @return the mapping of the previous transaction hash to details of a new boosted transaction
    */
-  async _boostStuckPendingTransactions (blockNumber: number): Promise<PrefixedHexString[]> {
-    const transactionHashes: PrefixedHexString[] = []
+  async _boostStuckPendingTransactions (blockNumber: number): Promise<Map<PrefixedHexString, SignedTransactionDetails>> {
+    const transactionDetails = new Map<PrefixedHexString, SignedTransactionDetails>()
     // repeat separately for each signer (manager, all workers)
-    let signedTx = await this._boostStuckTransactionsForManager(blockNumber)
-    if (signedTx != null) {
-      transactionHashes.push(signedTx)
+    const managerBoostedTransactions = await this._boostStuckTransactionsForManager(blockNumber)
+    for (const [txHash, boostedTxDetails] of managerBoostedTransactions) {
+      transactionDetails.set(txHash, boostedTxDetails)
     }
     for (const workerIndex of [0]) {
-      signedTx = await this._boostStuckTransactionsForWorker(blockNumber, workerIndex)
-      if (signedTx != null) {
-        transactionHashes.push(signedTx)
+      const workerBoostedTransactions = await this._boostStuckTransactionsForWorker(blockNumber, workerIndex)
+      for (const [txHash, boostedTxDetails] of workerBoostedTransactions) {
+        transactionDetails.set(txHash, boostedTxDetails)
       }
     }
-    return transactionHashes
+    return transactionDetails
   }
 
-  async _boostStuckTransactionsForManager (blockNumber: number): Promise<PrefixedHexString | null> {
-    return await this.transactionManager.boostOldestPendingTransactionForSigner(this.managerAddress, blockNumber)
+  async _boostStuckTransactionsForManager (blockNumber: number): Promise<Map<PrefixedHexString, SignedTransactionDetails>> {
+    return await this.transactionManager.boostUnderpricedPendingTransactionsForSigner(this.managerAddress, blockNumber)
   }
 
-  async _boostStuckTransactionsForWorker (blockNumber: number, workerIndex: number): Promise<PrefixedHexString | null> {
+  async _boostStuckTransactionsForWorker (blockNumber: number, workerIndex: number): Promise<Map<PrefixedHexString, SignedTransactionDetails>> {
     const signer = this.workerAddress
-    return await this.transactionManager.boostOldestPendingTransactionForSigner(signer, blockNumber)
+    return await this.transactionManager.boostUnderpricedPendingTransactionsForSigner(signer, blockNumber)
   }
 
   _isTrustedPaymaster (paymaster: string): boolean {

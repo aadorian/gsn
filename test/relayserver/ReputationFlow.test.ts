@@ -5,7 +5,6 @@ import { deployHub, evmMine, startRelay, stopRelay } from '../TestUtils'
 import { registerForwarderForGsn } from '../../src/common/EIP712/ForwarderUtil'
 import { HttpProvider } from 'web3-core'
 import { RelayProvider } from '../../src/relayclient/RelayProvider'
-import { GSNConfig } from '../../src/relayclient/GSNConfigurator'
 
 const TestPaymasterConfigurableMisbehavior = artifacts.require('TestPaymasterConfigurableMisbehavior')
 const TestRecipient = artifacts.require('TestRecipient')
@@ -33,12 +32,13 @@ contract('ReputationFlow', function (accounts) {
     await misbehavingPaymaster.setRelayHub(relayHub.address)
     await misbehavingPaymaster.deposit({ value: web3.utils.toWei('1', 'ether') })
 
-    const relayClientConfig: Partial<GSNConfig> = {
-      logLevel: 'error',
-      relayHubAddress: relayHub.address,
-      paymasterAddress: misbehavingPaymaster.address
-    }
-    const relayProvider = new RelayProvider(web3.currentProvider as HttpProvider, relayClientConfig)
+    const relayProvider = await RelayProvider.newProvider({
+      provider: web3.currentProvider as HttpProvider,
+      config: {
+        loggerConfiguration: { logLevel: 'error' },
+        paymasterAddress: misbehavingPaymaster.address
+      }
+    }).init()
     // @ts-ignore
     TestRecipient.web3.setProvider(relayProvider)
 
@@ -68,7 +68,7 @@ contract('ReputationFlow', function (accounts) {
             await evmMine()
             continue
           }
-          assert.ok(e.message.includes('Refusing to serve transactions for paymaster'))
+          assert.ok(e.message.includes('Refusing to serve transactions for paymaster'), e.message)
           assert.isAtLeast(i, 7, 'refused too soon')
           return
         }
